@@ -1,0 +1,131 @@
+import cv2
+import mediapipe as mp
+import numpy as np
+import os
+import pickle
+from datetime import datetime
+
+class FaceDataCollector:
+    def __init__(self):
+        self.mp_face_mesh = mp.solutions.face_mesh
+        self.face_mesh = self.mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        
+        self.database_path = "face_database"
+        os.makedirs(self.database_path, exist_ok=True)
+        
+        self.current_person = None
+        self.images_captured = 0
+        self.max_images = 3
+        
+        # Text input variables
+        self.input_mode = False
+        self.current_input = []
+        
+    def collect_face_data(self):
+        cap = cv2.VideoCapture(0)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+                
+            display_frame = frame.copy()
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = self.face_mesh.process(rgb_frame)
+            
+            if results.multi_face_landmarks:
+                for face_landmarks in results.multi_face_landmarks:
+                    for landmark in face_landmarks.landmark:
+                        x = int(landmark.x * frame.shape[1])
+                        y = int(landmark.y * frame.shape[0])
+                        cv2.circle(display_frame, (x, y), 1, (0, 255, 0), -1)
+            
+            # Handle text input mode
+            if self.input_mode:
+                cv2.putText(display_frame, "Enter ID: " + "".join(self.current_input), 
+                           (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display_frame, "Press ENTER to confirm, ESC to cancel", 
+                           (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Display status
+            cv2.putText(display_frame, f"Person ID: {self.current_person if self.current_person else 'None'}", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Images Captured: {self.images_captured}/{self.max_images}", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            cv2.imshow('Face Data Collection', display_frame)
+            
+            key = cv2.waitKey(1)
+            if key == -1:
+                continue
+                
+            if self.input_mode:
+                if key == 13:  # Enter
+                    self.current_person = "".join(self.current_input)
+                    os.makedirs(os.path.join(self.database_path, self.current_person), exist_ok=True)
+                    self.images_captured = 0
+                    self.input_mode = False
+                    self.current_input = []
+                elif key == 27:  # ESC
+                    self.input_mode = False
+                    self.current_input = []
+                elif 32 <= key <= 126:  # Printable characters
+                    self.current_input.append(chr(key))
+            else:
+                if key == ord('q'):
+                    break
+                elif key == ord('n'):
+                    self.input_mode = True
+                    self.current_input = []
+                elif key == ord('c'):
+                    if self.current_person and results.multi_face_landmarks and self.images_captured < self.max_images:
+                        self.save_face_data(frame, results.multi_face_landmarks[0])
+                        self.images_captured += 1
+                        print(f"Captured image {self.images_captured} for {self.current_person}")
+        
+        cap.release()
+        cv2.destroyAllWindows()
+        
+    def save_face_data(self, frame, face_landmarks):
+        """Save face image and landmark data to local file system with error handling."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        person_dir = os.path.join(self.database_path, self.current_person)
+        
+        # Ensure directory exists (redundant but ensures safety)
+        os.makedirs(person_dir, exist_ok=True)
+        
+        # Save image
+        image_path = os.path.join(person_dir, f"face_{timestamp}.jpg")
+        try:
+            success = cv2.imwrite(image_path, frame)
+            if not success:
+                print(f"Failed to save image at {image_path}")
+            else:
+                print(f"Image saved successfully at {image_path}")
+        except Exception as e:
+            print(f"Error saving image at {image_path}: {str(e)}")
+        
+        # Save landmarks
+        landmarks_data = [(lm.x, lm.y, lm.z) for lm in face_landmarks.landmark]
+        data_path = os.path.join(person_dir, f"landmarks_{timestamp}.pkl")
+        try:
+            with open(data_path, 'wb') as f:
+                pickle.dump(landmarks_data, f)
+            print(f"Landmarks saved successfully at {data_path}")
+        except Exception as e:
+            print(f"Error saving landmarks at {data_path}: {str(e)}")
+
+if __name__ == "__main__":
+    collector = FaceDataCollector()
+    print("Face Data Collection System")
+    print("Controls:")
+    print("  'n' - Start new person")
+    print("  'c' - Capture face (max 3 per person)")
+    print("  'q' - Quit")
+    collector.collect_face_data()
